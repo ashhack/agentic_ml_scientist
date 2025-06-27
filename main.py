@@ -1,4 +1,4 @@
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal, Optional, List
 
 from dotenv import load_dotenv
 
@@ -29,6 +29,7 @@ class MessageClassifier(BaseModel):
 class State(TypedDict):
     messages: Annotated[list, add_messages]
     message_type: str | None
+    path: List[str]
 
 
 def classify_message(state: State):
@@ -45,15 +46,26 @@ def classify_message(state: State):
         },
         {"role": "user", "content": last_message.content}
     ])
-    return {"message_type": result.message_type}
+
+    # Update path
+    new_path = state.get("path", []) + ["classifier"]
+
+    return {"message_type": result.message_type, "path": new_path}
 
 
 def router(state: State):
     message_type = state.get("message_type", "logical")
+    
+    # Update path
+    new_path = state.get("path", []) + ["router"]
+    return_value = {"path": new_path}
+    
     if message_type == "emotional":
-        return {"next": "therapist"}
-
-    return {"next": "logical"}
+        return_value["next"] = "therapist"
+    else:
+        return_value["next"] = "logical"
+    
+    return return_value
 
 
 def therapist_agent(state: State):
@@ -72,7 +84,9 @@ def therapist_agent(state: State):
         }
     ]
     reply = llm.invoke(messages)
-    return {"messages": [{"role": "assistant", "content": reply.content}]}
+    # Update path
+    new_path = state.get("path", []) + ["therapist"]
+    return {"messages": [{"role": "assistant", "content": reply.content}], "path": new_path}
 
 
 def logical_agent(state: State):
@@ -91,7 +105,9 @@ def logical_agent(state: State):
         }
     ]
     reply = llm.invoke(messages)
-    return {"messages": [{"role": "assistant", "content": reply.content}]}
+    # Update path
+    new_path = state.get("path", []) + ["logical"]
+    return {"messages": [{"role": "assistant", "content": reply.content}], "path": new_path}
 
 
 graph_builder = StateGraph(State)
@@ -125,11 +141,16 @@ def run_chatbot():
             print("Bye")
             break
 
+        state["path"] = []
         state["messages"] = state.get("messages", []) + [
             {"role": "user", "content": user_input}
         ]
 
         state = graph.invoke(state)
+
+        # Print verbose path before final answer
+        print(f"\n[Agent Path] {' → '.join(state['path'])}")
+
 
         if state.get("messages") and len(state["messages"]) > 0:
             last_message = state["messages"][-1]
