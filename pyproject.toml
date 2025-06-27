@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "a2a-sdk>=0.2.9",
     "dotenv>=0.9.9",
     "langchain>=0.3.26",
     "langchain-google-genai>=2.1.5",
