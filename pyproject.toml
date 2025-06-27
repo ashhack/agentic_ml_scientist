@@ -10,4 +10,5 @@ dependencies = [
     "langchain>=0.3.26",
     "langchain-google-genai>=2.1.5",
     "langgraph>=0.4.10",
+    "pylint>=3.3.7",
 ]
