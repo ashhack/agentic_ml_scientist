@@ -3,8 +3,6 @@ name: Lint with Pylint
 on:
   push:
     branches: [ '*' ]
-  pull_request:
-    branches: [ '*' ]
 
 jobs:
   lint:
@@ -24,13 +22,8 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pylint
 
-      - name: Run Pylint
+      - name: Run Pylint and Show Score
         run: |
-          echo "::group::Pylint Report"
           pylint $(git ls-files '*.py') --exit-zero --score=y | tee pylint-report.txt
-          echo "::endgroup::"
-
-      - name: Show Pylint Score
-        run: |
           SCORE=$(grep 'Your code has been rated at' pylint-report.txt | awk '{print $7}')
           echo "Pylint score: $SCORE"
