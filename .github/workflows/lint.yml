@@ -2,9 +2,9 @@ name: Lint with Pylint
 
 on:
   push:
-    branches: [ '' ]
+    branches: [ '*' ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ '*' ]
 
 jobs:
   lint:
