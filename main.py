@@ -109,39 +109,22 @@ async def logical_agent(state: State):
     )
 
     tools = await client.get_tools()
-
     logical_llm = llm.bind_tools(tools)
-
     reply = await logical_llm.ainvoke(messages)
+    print(reply)
 
-    if hasattr(reply, "tool_calls") and reply.tool_calls:
-        messages.append(reply)
+    tool_call_stack = []
+    if reply.tool_calls:
         for tool_call in reply.tool_calls:
-            tool_to_call = next((t for t in tools if t.name == tool_call["name"]), None)
-            if tool_to_call:
-                tool_output = await tool_to_call.ainvoke(tool_call["args"])
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call["id"],
-                        "content": str(tool_output),
-                    }
-                )
-            else:
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call["id"],
-                        "content": f"Error: Tool '{tool_call['name']}' not found.",
-                    }
-                )
-        reply = await logical_llm.ainvoke(messages)
+            tool_call_stack.append(f"Tool Called: {tool_call["name"]}; Args: {tool_call["args"]}")
+
 
     new_path = state.get("path", []) + ["logical"]
+
     return {
         "messages": [{"role": "assistant", "content": reply.content}],
         "path": new_path,
-        "tool_calls": state.get("tool_calls", []),
+        "tool_calls": state.get("tool_calls", []) + ["->".join(tool_call_stack)],
     }
 
 graph_builder = StateGraph(State)
@@ -168,6 +151,7 @@ async def run_chatbot():
             print("Bye")
             break
         state["path"] = []
+        state["tool_calls"] = []
         state["messages"] = state.get("messages", []) + [
             {"role": "user", "content": user_input}
         ]
@@ -176,7 +160,7 @@ async def run_chatbot():
         print(f"\n[Agent Path] {' → '.join(state['path'])}")
         if state.get("tool_calls"):
             for call in state["tool_calls"]:
-                print(f"[MCP Tool Used] {call['tool_name']} with args {call['args']}")
+                print(f"[MCP Tool Used] {call}")
         if state.get("messages") and len(state["messages"]) > 0:
             last_message = state["messages"][-1]
             print(f"Assistant: {last_message.content}")
