@@ -1,23 +1,24 @@
+import os
+import asyncio
 from typing import Annotated, Literal, Optional, List
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 from langgraph.graph import StateGraph, START, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph.message import add_messages
-from langchain.chat_models import init_chat_model
+from langchain_ollama import ChatOllama
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash",
-    temperature=0,
-    max_tokens=None,
-    timeout=None,
-    max_retries=2,
+llm = ChatOllama(
+    model="llama3.1:8b",
+    temperature=0
 )
+
 
 class MessageClassifier(BaseModel):
     message_type: Literal["emotional", "logical"] = Field(
@@ -25,12 +26,11 @@ class MessageClassifier(BaseModel):
         description="Classify if the message requires an emotional (therapist) or logical response."
     )
 
-
 class State(TypedDict):
     messages: Annotated[list, add_messages]
     message_type: str | None
     path: List[str]
-
+    tool_calls: List[dict]  # Track tool calls
 
 def classify_message(state: State):
     last_message = state["messages"][-1]
@@ -47,30 +47,29 @@ def classify_message(state: State):
         {"role": "user", "content": last_message.content}
     ])
 
-    # Update path
     new_path = state.get("path", []) + ["classifier"]
 
-    return {"message_type": result.message_type, "path": new_path}
-
+    return {
+        "message_type": result.message_type,
+        "path": new_path,
+        "tool_calls": state.get("tool_calls", []),
+    }
 
 def router(state: State):
     message_type = state.get("message_type", "logical")
-    
-    # Update path
     new_path = state.get("path", []) + ["router"]
-    return_value = {"path": new_path}
-    
+    return_value = {
+        "path": new_path,
+        "tool_calls": state.get("tool_calls", []),
+    }
     if message_type == "emotional":
         return_value["next"] = "therapist"
     else:
         return_value["next"] = "logical"
-    
     return return_value
-
 
 def therapist_agent(state: State):
     last_message = state["messages"][-1]
-
     messages = [
         {"role": "system",
          "content": """You are a compassionate therapist. Focus on the emotional aspects of the user's message.
@@ -78,20 +77,18 @@ def therapist_agent(state: State):
                         Ask thoughtful questions to help them explore their feelings more deeply.
                         Avoid giving logical solutions unless explicitly asked."""
          },
-        {
-            "role": "user",
-            "content": last_message.content
-        }
+        {"role": "user", "content": last_message.content}
     ]
     reply = llm.invoke(messages)
-    # Update path
     new_path = state.get("path", []) + ["therapist"]
-    return {"messages": [{"role": "assistant", "content": reply.content}], "path": new_path}
+    return {
+        "messages": [{"role": "assistant", "content": reply.content}],
+        "path": new_path,
+        "tool_calls": state.get("tool_calls", []),
+    }
 
-
-def logical_agent(state: State):
+async def logical_agent(state: State):
     last_message = state["messages"][-1]
-
     messages = [
         {"role": "system",
          "content": """You are a purely logical assistant. Focus only on facts and information.
@@ -99,63 +96,90 @@ def logical_agent(state: State):
             Do not address emotions or provide emotional support.
             Be direct and straightforward in your responses."""
          },
-        {
-            "role": "user",
-            "content": last_message.content
-        }
+        {"role": "user", "content": last_message.content}
     ]
-    reply = llm.invoke(messages)
-    # Update path
-    new_path = state.get("path", []) + ["logical"]
-    return {"messages": [{"role": "assistant", "content": reply.content}], "path": new_path}
 
+    client = MultiServerMCPClient(
+        {
+            "calculator": {
+                "url": "http://localhost:8050/mcp",
+                "transport": "streamable_http",
+            }
+        }
+    )
+
+    tools = await client.get_tools()
+
+    logical_llm = llm.bind_tools(tools)
+
+    reply = await logical_llm.ainvoke(messages)
+
+    if hasattr(reply, "tool_calls") and reply.tool_calls:
+        messages.append(reply)
+        for tool_call in reply.tool_calls:
+            tool_to_call = next((t for t in tools if t.name == tool_call["name"]), None)
+            if tool_to_call:
+                tool_output = await tool_to_call.ainvoke(tool_call["args"])
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": str(tool_output),
+                    }
+                )
+            else:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": f"Error: Tool '{tool_call['name']}' not found.",
+                    }
+                )
+        reply = await logical_llm.ainvoke(messages)
+
+    new_path = state.get("path", []) + ["logical"]
+    return {
+        "messages": [{"role": "assistant", "content": reply.content}],
+        "path": new_path,
+        "tool_calls": state.get("tool_calls", []),
+    }
 
 graph_builder = StateGraph(State)
-
 graph_builder.add_node("classifier", classify_message)
 graph_builder.add_node("router", router)
 graph_builder.add_node("therapist", therapist_agent)
 graph_builder.add_node("logical", logical_agent)
-
 graph_builder.add_edge(START, "classifier")
 graph_builder.add_edge("classifier", "router")
-
 graph_builder.add_conditional_edges(
     "router",
     lambda state: state.get("next"),
     {"therapist": "therapist", "logical": "logical"}
 )
-
 graph_builder.add_edge("therapist", END)
 graph_builder.add_edge("logical", END)
-
 graph = graph_builder.compile()
 
-
-def run_chatbot():
-    state = {"messages": [], "message_type": None}
-
+async def run_chatbot():
+    state = {"messages": [], "message_type": None, "tool_calls": []}
     while True:
-        user_input = input("Message: ")
+        user_input = await asyncio.to_thread(input, "Message: ")
         if user_input == "exit":
             print("Bye")
             break
-
         state["path"] = []
         state["messages"] = state.get("messages", []) + [
             {"role": "user", "content": user_input}
         ]
-
-        state = graph.invoke(state)
-
-        # Print verbose path before final answer
+        state["tool_calls"] = state.get("tool_calls", [])
+        state = await graph.ainvoke(state)
         print(f"\n[Agent Path] {' → '.join(state['path'])}")
-
-
+        if state.get("tool_calls"):
+            for call in state["tool_calls"]:
+                print(f"[MCP Tool Used] {call['tool_name']} with args {call['args']}")
         if state.get("messages") and len(state["messages"]) > 0:
             last_message = state["messages"][-1]
             print(f"Assistant: {last_message.content}")
 
-
 if __name__ == "__main__":
-    run_chatbot()
+    asyncio.run(run_chatbot())
