@@ -4,9 +4,11 @@ from typing import Annotated, Literal, Optional, List
 
 from dotenv import load_dotenv, find_dotenv
 
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph.message import add_messages
+from langgraph.prebuilt import create_react_agent
 from langchain_ollama import ChatOllama
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import BaseModel, Field
@@ -88,17 +90,6 @@ def therapist_agent(state: State):
     }
 
 async def logical_agent(state: State):
-    last_message = state["messages"][-1]
-    messages = [
-        {"role": "system",
-         "content": """You are a purely logical assistant. Focus only on facts and information.
-            Provide clear, concise answers based on logic and evidence.
-            Do not address emotions or provide emotional support.
-            Be direct and straightforward in your responses."""
-         },
-        {"role": "user", "content": last_message.content}
-    ]
-
     client = MultiServerMCPClient(
         {
             "calculator": {
@@ -109,25 +100,28 @@ async def logical_agent(state: State):
     )
 
     tools = await client.get_tools()
-    logical_llm = llm.bind_tools(tools)
-    reply = await logical_llm.ainvoke(messages)
-    print(reply)
+    agent_runnable = create_react_agent(llm, tools)
 
-    tool_call_stack = []
-    if reply.tool_calls:
-        for tool_call in reply.tool_calls:
-            tool_call_stack.append(f"Tool Called: {tool_call["name"]}; Args: {tool_call["args"]}")
+    # The react agent expects a dictionary with a "messages" key.
+    response = await agent_runnable.ainvoke({"messages": state["messages"]})
 
+    new_messages = response["messages"][len(state["messages"]):]
+
+    tool_calls = []
+    for message in new_messages:
+        if hasattr(message, 'tool_calls') and message.tool_calls:
+            for tool_call in message.tool_calls:
+                tool_calls.append(f"Tool Called: {tool_call['name']}; Args: {tool_call['args']}")
 
     new_path = state.get("path", []) + ["logical"]
 
     return {
-        "messages": [{"role": "assistant", "content": reply.content}],
+        "messages": new_messages,
         "path": new_path,
-        "tool_calls": state.get("tool_calls", []) + ["->".join(tool_call_stack)],
+        "tool_calls": state.get("tool_calls", []) + tool_calls,
     }
 
-graph_builder = StateGraph(State)
+graph_builder = StateGraph(State)   
 graph_builder.add_node("classifier", classify_message)
 graph_builder.add_node("router", router)
 graph_builder.add_node("therapist", therapist_agent)
@@ -155,7 +149,6 @@ async def run_chatbot():
         state["messages"] = state.get("messages", []) + [
             {"role": "user", "content": user_input}
         ]
-        state["tool_calls"] = state.get("tool_calls", [])
         state = await graph.ainvoke(state)
         print(f"\n[Agent Path] {' → '.join(state['path'])}")
         if state.get("tool_calls"):
