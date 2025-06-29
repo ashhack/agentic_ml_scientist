@@ -1,6 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv, find_dotenv
 
+from src.common.config_parser import YamlConfigParser
 
 load_dotenv(find_dotenv())
 
@@ -35,8 +36,12 @@ async def sub(a: int, b: int) -> int:
 
 # Run the server
 if __name__ == "__main__":
-    transport = "streamable-http"
-    match transport:
+
+    parser = YamlConfigParser()
+    configs = parser.load('../../config', filenames=["mcp.yaml"])
+    mcp_config = configs.get("mcp")
+    transport_mode = mcp_config["transport"]["mode"]
+    match transport_mode:
         case "stdio":
             print("Running server with stdio transport")
             mcp.run(transport="stdio")
