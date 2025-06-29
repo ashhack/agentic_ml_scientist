@@ -23,11 +23,12 @@ A Machine Learning Engineer Agent using LangGraph and Gemini (Google Generative 
    ```
 3. Install dependencies:
    ```bash
-   pip install -r requirements.txt
    # or, if using poetry or uv:
    poetry install
    # or
-   uv pip install -r requirements.txt
+   uv pip install -r pyproject.toml
+   # or
+   uv sync
    ```
 4. Add your Google API key to a `.env` file:
    ```
