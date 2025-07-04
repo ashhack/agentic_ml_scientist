@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP  
 from dotenv import load_dotenv, find_dotenv
 
 from src.common.config_parser import YamlConfigParser
@@ -38,7 +38,7 @@ async def sub(a: int, b: int) -> int:
 if __name__ == "__main__":
 
     parser = YamlConfigParser()
-    configs = parser.load('../../config', filenames=["mcp.yaml"])
+    configs = parser.load('config', filenames=["mcp.yaml"])
     mcp_config = configs.get("mcp")
     transport_mode = mcp_config["transport"]["mode"]
     match transport_mode:

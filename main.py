@@ -11,6 +11,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 from langchain_ollama import ChatOllama
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langsmith import traceable
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
